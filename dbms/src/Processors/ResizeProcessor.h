@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Processors/IProcessor.h>
+#include <queue>
 
 
 namespace DB
@@ -31,10 +32,18 @@ public:
     String getName() const override { return "Resize"; }
 
     Status prepare() override;
+    Status prepare(const InputRawPtrs &, const OutputRawPtrs &) override;
 
 private:
     InputPorts::iterator current_input;
     OutputPorts::iterator current_output;
+
+    size_t num_finished_inputs = 0;
+    size_t num_finished_outputs = 0;
+    std::queue<OutputPort *> waiting_outputs;
+    std::queue<InputPort *> not_needed_inputs;
+    std::queue<InputPort *> inputs_with_data;
+    bool initialized = false;
 };
 
 }

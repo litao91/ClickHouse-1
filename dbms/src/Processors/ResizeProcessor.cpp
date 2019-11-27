@@ -153,5 +153,82 @@ ResizeProcessor::Status ResizeProcessor::prepare()
     return get_status_if_no_inputs();
 }
 
+IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs, const OutputRawPtrs & updated_outputs)
+{
+    for (auto & output : updated_outputs)
+    {
+        if (output->isFinished())
+        {
+            ++num_finished_outputs;
+            continue;
+        }
+
+        if (output->canPush())
+            waiting_outputs.push(output);
+    }
+
+    if (num_finished_outputs == outputs.size())
+    {
+        for (auto & input : inputs)
+            input.close();
+
+        return Status::Finished;
+    }
+
+    for (auto & input : updated_inputs)
+    {
+        if (input->isFinished())
+        {
+            ++num_finished_inputs;
+            continue;
+        }
+
+        if (input->hasData())
+            inputs_with_data.push(input);
+        else
+        {
+            input->setNotNeeded();
+            not_needed_inputs.push(input);
+        }
+    }
+
+    while (!waiting_outputs.empty() && !inputs_with_data.empty())
+    {
+        auto waiting_output = waiting_outputs.front();
+        waiting_outputs.pop();
+
+        auto input_with_data = inputs_with_data.front();
+        inputs_with_data.pop();
+
+        waiting_output->pushData(input_with_data->pullData());
+
+        if (input_with_data->isFinished())
+            ++num_finished_inputs;
+    }
+
+    if (num_finished_inputs == inputs.size())
+    {
+        for (auto & output : outputs)
+            output.finish();
+
+        return Status::Finished;
+    }
+
+    size_t num_needed_inputs = waiting_outputs.size();
+    while (!not_needed_inputs.empty() && num_needed_inputs > 0)
+    {
+        auto input = not_needed_inputs.front();
+        not_needed_inputs.pop();
+
+        input->setNeeded();
+        --num_needed_inputs;
+    }
+
+    if (!waiting_outputs.empty())
+        return Status::NeedData;
+
+    return Status::PortFull;
+}
+
 }
 

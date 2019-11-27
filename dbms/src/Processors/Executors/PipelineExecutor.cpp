@@ -131,6 +131,7 @@ void PipelineExecutor::addChildlessProcessorsToStack(Stack & stack)
         if (graph[proc].directEdges.empty())
         {
             stack.push(proc);
+            /// do not lock mutex, as this function is executedin single thread
             graph[proc].status = ExecStatus::Preparing;
         }
     }
@@ -195,8 +196,21 @@ void PipelineExecutor::expandPipeline(Stack & stack, UInt64 pid)
     UInt64 num_processors = processors.size();
     for (UInt64 node = 0; node < num_processors; ++node)
     {
+        size_t num_direct_edges = graph[node].directEdges.size();
+        size_t num_back_edges = graph[node].backEdges.size();
+
         if (addEdges(node))
         {
+            std::lock_guard guard(graph[node].status_mutex);
+
+            for (auto it = graph[node].processor->getInputs().rbegin();
+                 num_back_edges < graph[node].backEdges.size(); ++num_back_edges, ++it)
+                     graph[node].updated_input_ports.emplace_back(*it);
+
+            for (auto it = graph[node].processor->getOutputs().rbegin();
+                 num_direct_edges < graph[node].directEdges.size(); ++num_direct_edges, ++it)
+                     graph[node].updated_output_ports.emplace_back(*it);
+
             if (graph[node].status == ExecStatus::Idle || graph[node].status == ExecStatus::New)
             {
                 graph[node].status = ExecStatus::Preparing;
@@ -427,7 +441,7 @@ void PipelineExecutor::execute(size_t num_threads)
 
     bool all_processors_finished = true;
     for (auto & node : graph)
-        if (node.status != ExecStatus::Finished)
+        if (node.status != ExecStatus::Finished)  /// Single thread, do not hold mutex
             all_processors_finished = false;
 
     if (!all_processors_finished)

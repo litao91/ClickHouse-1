@@ -87,17 +87,19 @@ private:
         Edges directEdges;
         Edges backEdges;
 
-        std::atomic<ExecStatus> status;
-        /// This flag can be set by any executor.
-        /// When enabled, any executor can try to atomically set Preparing state to status.
-        std::atomic_bool need_to_be_prepared;
+        ExecStatus status;
+        std::mutex status_mutex;
+
         /// Last state for profiling.
         IProcessor::Status last_processor_status = IProcessor::Status::NeedData;
 
         std::unique_ptr<ExecutionState> execution_state;
 
+        IProcessor::InputRawPtrs updated_input_ports;
+        IProcessor::OutputRawPtrs updated_output_ports;
+
         Node(IProcessor * processor_, UInt64 processor_id)
-            : processor(processor_), status(ExecStatus::New), need_to_be_prepared(false)
+            : processor(processor_), status(ExecStatus::New)
         {
             execution_state = std::make_unique<ExecutionState>();
             execution_state->processor = processor;
@@ -105,8 +107,8 @@ private:
         }
 
         Node(Node && other) noexcept
-            : processor(other.processor), status(other.status.load())
-            , need_to_be_prepared(other.need_to_be_prepared.load()), execution_state(std::move(other.execution_state))
+            : processor(other.processor), status(other.status)
+            , execution_state(std::move(other.execution_state))
         {
         }
     };

@@ -171,7 +171,16 @@ public:
       * - method 'prepare' cannot be executed in parallel even for different objects,
       *   if they are connected (including indirectly) to each other by their ports;
       */
-    virtual Status prepare() = 0;
+    virtual Status prepare()
+    {
+        throw Exception("Method 'prepare' is not implemented for " + getName() + " processor", ErrorCodes::NOT_IMPLEMENTED);
+    }
+
+    using InputRawPtrs = std::vector<InputPort *>;
+    using OutputRawPtrs = std::vector<OutputPort *>;
+
+    /// Optimization for prepare in case we know ports were updated.
+    virtual Status prepare(const InputRawPtrs &, const OutputRawPtrs &) { return prepare(); }
 
     /** You may call this method if 'prepare' returned Ready.
       * This method cannot access any ports. It should use only data that was prepared by 'prepare' method.
