@@ -52,26 +52,24 @@ bool PipelineExecutor::addEdges(UInt64 node)
 
     const IProcessor * cur = graph[node].processor;
 
-    auto add_edge = [&](auto & from_port, const IProcessor * to_proc, Edges & edges)
+    auto add_edge = [&](auto & from_port, const IProcessor * to_proc, Edges & edges,
+                        bool is_backward, InputPort * input_port, OutputPort * output_port)
     {
         auto it = processors_map.find(to_proc);
         if (it == processors_map.end())
             throwUnknownProcessor(to_proc, cur, true);
 
         UInt64 proc_num = it->second;
-        Edge * edge_ptr = nullptr;
 
         for (auto & edge : edges)
-            if (edge.to == proc_num)
-                edge_ptr = &edge;
-
-        if (!edge_ptr)
         {
-            edge_ptr = &edges.emplace_back();
-            edge_ptr->to = proc_num;
+            if (edge.to == proc_num)
+                throw Exception("Multiple edges are not allowed for the same processors.", ErrorCodes::LOGICAL_ERROR);
         }
 
-        from_port.setVersion(&edge_ptr->version);
+        auto & edge = edges.emplace_back(proc_num, is_backward, input_port, output_port);
+
+        from_port.setVersion(&edge.version);
     };
 
     bool was_edge_added = false;
@@ -86,7 +84,7 @@ bool PipelineExecutor::addEdges(UInt64 node)
         for (auto it = std::next(inputs.begin(), from_input); it != inputs.end(); ++it)
         {
             const IProcessor * proc = &it->getOutputPort().getProcessor();
-            add_edge(*it, proc, graph[node].backEdges);
+            add_edge(*it, proc, graph[node].backEdges, true, &*it, &it->getOutputPort());
         }
     }
 
@@ -100,7 +98,7 @@ bool PipelineExecutor::addEdges(UInt64 node)
         for (auto it = std::next(outputs.begin(), from_output); it != outputs.end(); ++it)
         {
             const IProcessor * proc = &it->getInputPort().getProcessor();
-            add_edge(*it, proc, graph[node].directEdges);
+            add_edge(*it, proc, graph[node].directEdges, false, &it->getInputPort(), &*it);
         }
     }
 
@@ -226,7 +224,9 @@ bool PipelineExecutor::tryAddProcessorToStackIfUpdated(Edge & edge, Stack & stac
 
     auto & node = graph[edge.to];
 
-    ExecStatus status = node.status.load();
+    std::lock_guard guard(node.status_mutex);
+
+    ExecStatus status = node.status;
 
     /// Don't add processor if nothing was read from port.
     if (status != ExecStatus::New && edge.version == edge.prev_version)
@@ -236,128 +236,117 @@ bool PipelineExecutor::tryAddProcessorToStackIfUpdated(Edge & edge, Stack & stac
         return false;
 
     /// Signal that node need to be prepared.
-    node.need_to_be_prepared = true;
     edge.prev_version = edge.version;
 
-    /// Try to get ownership for node.
+    if (edge.backward)
+        node.updated_output_ports.push_back(edge.output_port);
+    else
+        node.updated_input_ports.push_back(edge.input_port);
 
-    /// Assume that current status is New or Idle. Otherwise, can't prepare node.
-    if (status != ExecStatus::New)
-        status = ExecStatus::Idle;
+    if (status == ExecStatus::New || status == ExecStatus::Idle)
+    {
+        node.status = ExecStatus::Preparing;
+        stack.push(edge.to);
+        return true;
+    }
 
-    /// Statuses but New and Idle are not interesting because they own node.
-    /// Prepare will be called in owning thread before changing status.
-    while (!node.status.compare_exchange_weak(status, ExecStatus::Preparing))
-        if (!(status == ExecStatus::New || status == ExecStatus::Idle) || !node.need_to_be_prepared)
-            return false;
-
-    stack.push(edge.to);
-    return true;
-
+    return false;
 }
 
 bool PipelineExecutor::prepareProcessor(UInt64 pid, Stack & children, Stack & parents, size_t thread_number, bool async)
 {
+
+
     /// In this method we have ownership on node.
     auto & node = graph[pid];
+
+    bool need_traverse = false;
+    bool need_expand_pipeline = false;
 
     {
         /// Stopwatch watch;
 
-        /// Disable flag before prepare call. Otherwise, we can skip prepare request.
-        /// Prepare can be called more times than needed, but it's ok.
-        node.need_to_be_prepared = false;
+        std::lock_guard guard(node.status_mutex);
 
-        auto status = node.processor->prepare();
+        auto status = node.processor->prepare(node.updated_input_ports, node.updated_output_ports);
+        node.updated_output_ports.clear();
+        node.updated_output_ports.clear();
 
         /// node.execution_state->preparation_time_ns += watch.elapsed();
         node.last_processor_status = status;
+
+        switch (node.last_processor_status)
+        {
+            case IProcessor::Status::NeedData:
+            case IProcessor::Status::PortFull:
+            {
+                need_traverse = true;
+                node.status = ExecStatus::Idle;
+                break;
+            }
+            case IProcessor::Status::Finished:
+            {
+                need_traverse = true;
+                node.status = ExecStatus::Finished;
+                break;
+            }
+            case IProcessor::Status::Ready:
+            {
+                node.status = ExecStatus::Executing;
+                return true;
+            }
+            case IProcessor::Status::Async:
+            {
+                throw Exception("Async is temporary not supported.", ErrorCodes::LOGICAL_ERROR);
+
+//            node.status = ExecStatus::Executing;
+//            addAsyncJob(pid);
+//            break;
+            }
+            case IProcessor::Status::Wait:
+            {
+                if (!async)
+                    throw Exception("Processor returned status Wait before Async.", ErrorCodes::LOGICAL_ERROR);
+                break;
+            }
+            case IProcessor::Status::ExpandPipeline:
+            {
+                need_expand_pipeline = true;
+                break;
+            }
+        }
     }
 
-    auto add_neighbours_to_prepare_queue = [&] ()
+    if (need_traverse)
     {
+
         for (auto & edge : node.backEdges)
             tryAddProcessorToStackIfUpdated(edge, parents);
 
         for (auto & edge : node.directEdges)
             tryAddProcessorToStackIfUpdated(edge, children);
-    };
+    }
 
-    auto try_release_ownership = [&] ()
+    if (need_expand_pipeline)
     {
-        /// This function can be called after expand pipeline, where node from outer scope is not longer valid.
-        auto & node_ = graph[pid];
-        ExecStatus expected = ExecStatus::Idle;
-        node_.status = ExecStatus::Idle;
-
-        if (node_.need_to_be_prepared)
-        {
-            while (!node_.status.compare_exchange_weak(expected, ExecStatus::Preparing))
-                if (!(expected == ExecStatus::Idle) || !node_.need_to_be_prepared)
-                    return;
-
-            children.push(pid);
-        }
-    };
-
-    switch (node.last_processor_status)
-    {
-        case IProcessor::Status::NeedData:
-        case IProcessor::Status::PortFull:
-        {
-            add_neighbours_to_prepare_queue();
-            try_release_ownership();
-
-            break;
-        }
-        case IProcessor::Status::Finished:
-        {
-            add_neighbours_to_prepare_queue();
-            node.status = ExecStatus::Finished;
-            break;
-        }
-        case IProcessor::Status::Ready:
-        {
-            node.status = ExecStatus::Executing;
-            return true;
-        }
-        case IProcessor::Status::Async:
-        {
-            throw Exception("Async is temporary not supported.", ErrorCodes::LOGICAL_ERROR);
-
-//            node.status = ExecStatus::Executing;
-//            addAsyncJob(pid);
-//            break;
-        }
-        case IProcessor::Status::Wait:
-        {
-            if (!async)
-                throw Exception("Processor returned status Wait before Async.", ErrorCodes::LOGICAL_ERROR);
-            break;
-        }
-        case IProcessor::Status::ExpandPipeline:
-        {
-            executor_contexts[thread_number]->task_list.emplace_back(
+        executor_contexts[thread_number]->task_list.emplace_back(
                 node.execution_state.get(),
                 &parents
-            );
+        );
 
-            ExpandPipelineTask * desired = &executor_contexts[thread_number]->task_list.back();
-            ExpandPipelineTask * expected = nullptr;
+        ExpandPipelineTask * desired = &executor_contexts[thread_number]->task_list.back();
+        ExpandPipelineTask * expected = nullptr;
 
-            while (!expand_pipeline_task.compare_exchange_strong(expected, desired))
-            {
-                doExpandPipeline(expected, true);
-                expected = nullptr;
-            }
-
-            doExpandPipeline(desired, true);
-
-            /// node is not longer valid after pipeline was expanded
-            graph[pid].need_to_be_prepared = true;
-            try_release_ownership();
-            break;
+        while (!expand_pipeline_task.compare_exchange_strong(expected, desired))
+        {
+            doExpandPipeline(expected, true);
+            expected = nullptr;
         }
+
+        doExpandPipeline(desired, true);
+
+        /// Add itself back to be prepared again.
+        children.push(pid);
     }
 
     return false;

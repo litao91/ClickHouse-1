@@ -43,7 +43,13 @@ private:
 
     struct Edge
     {
+        Edge(UInt64 to_, bool backward_, InputPort * input_port_, OutputPort * output_port_)
+         : to(to_), backward(backward_), input_port(input_port_), output_port(output_port_) {}
+
         UInt64 to = std::numeric_limits<UInt64>::max();
+        bool backward;
+        InputPort * input_port;
+        OutputPort * output_port;
 
         /// Edge version is increased when port's state is changed (e.g. when data is pushed). See Port.h for details.
         /// To compare version with prev_version we can decide if neighbour processor need to be prepared.
