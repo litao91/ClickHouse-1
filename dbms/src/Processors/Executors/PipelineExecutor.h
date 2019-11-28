@@ -53,8 +53,8 @@ private:
 
         /// Edge version is increased when port's state is changed (e.g. when data is pushed). See Port.h for details.
         /// To compare version with prev_version we can decide if neighbour processor need to be prepared.
-        UInt64 version = 0;
-        UInt64 prev_version = 0;
+        UInt64 version = 1;
+        UInt64 prev_version = 0; /// prev version is zero so ve traverse all edges after the first prepare.
     };
 
     /// Use std::list because new ports can be added to processor during execution.
@@ -64,7 +64,6 @@ private:
     /// Can be owning or not. Owning means that executor who set this status can change node's data and nobody else can.
     enum class ExecStatus
     {
-        New,  /// prepare wasn't called yet. Initial state. Non-owning.
         Idle,  /// prepare returned NeedData or PortFull. Non-owning.
         Preparing,  /// some executor is preparing processor, or processor is in task_queue. Owning.
         Executing,  /// prepare returned Ready and task is executing. Owning.
@@ -105,7 +104,7 @@ private:
         IProcessor::OutputRawPtrs updated_output_ports;
 
         Node(IProcessor * processor_, UInt64 processor_id)
-            : processor(processor_), status(ExecStatus::New)
+            : processor(processor_), status(ExecStatus::Idle)
         {
             execution_state = std::make_unique<ExecutionState>();
             execution_state->processor = processor;

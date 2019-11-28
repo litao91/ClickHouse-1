@@ -7,7 +7,6 @@
 #include <ext/scope_guard.h>
 #include <Common/CurrentThread.h>
 
-#include <boost/lockfree/queue.hpp>
 #include <Common/Stopwatch.h>
 #include <Processors/ISource.h>
 #include <Common/setThreadName.h>
@@ -209,7 +208,7 @@ void PipelineExecutor::expandPipeline(Stack & stack, UInt64 pid)
                  num_direct_edges < graph[node].directEdges.size(); ++num_direct_edges, ++it)
                      graph[node].updated_output_ports.emplace_back(&*it);
 
-            if (graph[node].status == ExecStatus::Idle || graph[node].status == ExecStatus::New)
+            if (graph[node].status == ExecStatus::Idle)
             {
                 graph[node].status = ExecStatus::Preparing;
                 stack.push(node);
@@ -228,33 +227,15 @@ bool PipelineExecutor::tryAddProcessorToStackIfUpdated(Edge & edge, Stack & stac
 
     ExecStatus status = node.status;
 
-    /// Don't add processor if nothing was read from port.
-    if (status != ExecStatus::New && edge.version == edge.prev_version)
-        return false;
-
     if (status == ExecStatus::Finished)
         return false;
 
-    /// Signal that node need to be prepared.
-    edge.prev_version = edge.version;
-
-    if (status == ExecStatus::New)
-    {
-        for (auto & input_port : node.processor->getInputs())
-            node.updated_input_ports.push_back(&input_port);
-
-        for (auto & output_port : node.processor->getOutputs())
-            node.updated_output_ports.push_back(&output_port);
-    }
+    if (edge.backward)
+        node.updated_output_ports.push_back(edge.output_port);
     else
-    {
-        if (edge.backward)
-            node.updated_output_ports.push_back(edge.output_port);
-        else
-            node.updated_input_ports.push_back(edge.input_port);
-    }
+        node.updated_input_ports.push_back(edge.input_port);
 
-    if (status == ExecStatus::New || status == ExecStatus::Idle)
+    if (status == ExecStatus::Idle)
     {
         node.status = ExecStatus::Preparing;
         stack.push(edge.to);
@@ -273,6 +254,9 @@ bool PipelineExecutor::prepareProcessor(UInt64 pid, Stack & children, Stack & pa
 
     bool need_traverse = false;
     bool need_expand_pipeline = false;
+
+    std::vector<Edge *> updated_back_edges;
+    std::vector<Edge *> updated_direct_edges;
 
     {
         /// Stopwatch watch;
@@ -326,16 +310,36 @@ bool PipelineExecutor::prepareProcessor(UInt64 pid, Stack & children, Stack & pa
                 break;
             }
         }
+
+        if (need_traverse)
+        {
+            for (auto & edge : node.backEdges)
+            {
+                if (edge.version != edge.prev_version)
+                {
+                    updated_back_edges.emplace_back(&edge);
+                    edge.prev_version = edge.version;
+                }
+            }
+
+            for (auto & edge : node.directEdges)
+            {
+                if (edge.version != edge.prev_version)
+                {
+                    updated_direct_edges.emplace_back(&edge);
+                    edge.prev_version = edge.version;
+                }
+            }
+        }
     }
 
     if (need_traverse)
     {
+        for (auto & edge : updated_back_edges)
+            tryAddProcessorToStackIfUpdated(*edge, parents);
 
-        for (auto & edge : node.backEdges)
-            tryAddProcessorToStackIfUpdated(edge, parents);
-
-        for (auto & edge : node.directEdges)
-            tryAddProcessorToStackIfUpdated(edge, children);
+        for (auto & edge : updated_direct_edges)
+            tryAddProcessorToStackIfUpdated(*edge, children);
     }
 
     if (need_expand_pipeline)
