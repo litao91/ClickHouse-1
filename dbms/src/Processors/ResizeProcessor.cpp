@@ -160,7 +160,10 @@ IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs,
         initialized = true;
 
         for (auto & input : inputs)
+        {
+            input.setNeeded();
             input_ports_status[&input] = InputStatus::NotActive;
+        }
 
         for (auto & output : outputs)
             output_ports_status[&output] = OutputStatus::NotActive;
