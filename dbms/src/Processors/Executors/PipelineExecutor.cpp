@@ -203,11 +203,11 @@ void PipelineExecutor::expandPipeline(Stack & stack, UInt64 pid)
 
             for (auto it = graph[node].processor->getInputs().rbegin();
                  num_back_edges < graph[node].backEdges.size(); ++num_back_edges, ++it)
-                     graph[node].updated_input_ports.emplace_back(*it);
+                     graph[node].updated_input_ports.emplace_back(&*it);
 
             for (auto it = graph[node].processor->getOutputs().rbegin();
                  num_direct_edges < graph[node].directEdges.size(); ++num_direct_edges, ++it)
-                     graph[node].updated_output_ports.emplace_back(*it);
+                     graph[node].updated_output_ports.emplace_back(&*it);
 
             if (graph[node].status == ExecStatus::Idle || graph[node].status == ExecStatus::New)
             {
