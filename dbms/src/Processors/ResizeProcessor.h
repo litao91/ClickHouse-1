@@ -44,6 +44,24 @@ private:
     std::queue<InputPort *> not_needed_inputs;
     std::queue<InputPort *> inputs_with_data;
     bool initialized = false;
+
+    enum class OutputStatus
+    {
+        NotActive,
+        NeedData,
+        Finished,
+    };
+
+    enum class InputStatus
+    {
+        NotNeeded,
+        Needed,
+        HasData,
+        Finished,
+    };
+
+    std::unordered_map<InputPort *, InputStatus> input_ports_status;
+    std::unordered_map<OutputPort *, OutputStatus> output_ports_status;
 };
 
 }

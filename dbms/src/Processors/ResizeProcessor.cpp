@@ -155,16 +155,41 @@ ResizeProcessor::Status ResizeProcessor::prepare()
 
 IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs, const OutputRawPtrs & updated_outputs)
 {
+    if (!initialized)
+    {
+        initialized = true;
+
+        for (auto & input : inputs)
+        {
+            input_ports_status[&input] = InputStatus::NotNeeded;
+            not_needed_inputs.emplace(&input);
+        }
+
+        for (auto & output : outputs)
+            output_ports_status[&output] = OutputStatus::NotActive;
+    }
+
     for (auto & output : updated_outputs)
     {
         if (output->isFinished())
         {
-            ++num_finished_outputs;
+            if (output_ports_status[output] != OutputStatus::Finished)
+            {
+                ++num_finished_outputs;
+                output_ports_status[output] = OutputStatus::Finished;
+            }
+
             continue;
         }
 
         if (output->canPush())
-            waiting_outputs.push(output);
+        {
+            if (output_ports_status[output] != OutputStatus::NeedData)
+            {
+                output_ports_status[output] = OutputStatus::NeedData;
+                waiting_outputs.push(output);
+            }
+        }
     }
 
     if (num_finished_outputs == outputs.size())
@@ -179,16 +204,31 @@ IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs,
     {
         if (input->isFinished())
         {
-            ++num_finished_inputs;
+            if (input_ports_status[input] != InputStatus::Finished)
+            {
+                input_ports_status[input] = InputStatus::Finished;
+                ++num_finished_inputs;
+            }
             continue;
         }
 
         if (input->hasData())
-            inputs_with_data.push(input);
+        {
+            if (input_ports_status[input] != InputStatus::HasData)
+            {
+                input_ports_status[input] = InputStatus::HasData;
+                inputs_with_data.push(input);
+            }
+        }
         else
         {
             input->setNotNeeded();
-            not_needed_inputs.push(input);
+
+            if (input_ports_status[input] != InputStatus::NotNeeded)
+            {
+                input_ports_status[input] = InputStatus::NotNeeded;
+                not_needed_inputs.push(input);
+            }
         }
     }
 
@@ -201,9 +241,17 @@ IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs,
         inputs_with_data.pop();
 
         waiting_output->pushData(input_with_data->pullData());
+        input_ports_status[input_with_data] = InputStatus::NotNeeded;
+        output_ports_status[waiting_output] = OutputStatus::NotActive;
 
         if (input_with_data->isFinished())
-            ++num_finished_inputs;
+        {
+            if (input_ports_status[input_with_data] != InputStatus::Finished)
+            {
+                input_ports_status[input_with_data] = InputStatus::Finished;
+                ++num_finished_inputs;
+            }
+        }
     }
 
     if (num_finished_inputs == inputs.size())
@@ -221,6 +269,7 @@ IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs,
         not_needed_inputs.pop();
 
         input->setNeeded();
+        input_ports_status[input] = InputStatus::Needed;
         --num_needed_inputs;
     }
 
