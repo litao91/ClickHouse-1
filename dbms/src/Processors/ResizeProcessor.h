@@ -41,7 +41,6 @@ private:
     size_t num_finished_inputs = 0;
     size_t num_finished_outputs = 0;
     std::queue<OutputPort *> waiting_outputs;
-    std::queue<InputPort *> not_needed_inputs;
     std::queue<InputPort *> inputs_with_data;
     bool initialized = false;
 
@@ -54,8 +53,7 @@ private:
 
     enum class InputStatus
     {
-        NotNeeded,
-        Needed,
+        NotActive,
         HasData,
         Finished,
     };

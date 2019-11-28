@@ -160,10 +160,7 @@ IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs,
         initialized = true;
 
         for (auto & input : inputs)
-        {
-            input_ports_status[&input] = InputStatus::NotNeeded;
-            not_needed_inputs.emplace(&input);
-        }
+            input_ports_status[&input] = InputStatus::NotActive;
 
         for (auto & output : outputs)
             output_ports_status[&output] = OutputStatus::NotActive;
@@ -220,16 +217,6 @@ IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs,
                 inputs_with_data.push(input);
             }
         }
-        else
-        {
-            input->setNotNeeded();
-
-            if (input_ports_status[input] != InputStatus::NotNeeded)
-            {
-                input_ports_status[input] = InputStatus::NotNeeded;
-                not_needed_inputs.push(input);
-            }
-        }
     }
 
     while (!waiting_outputs.empty() && !inputs_with_data.empty())
@@ -241,7 +228,7 @@ IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs,
         inputs_with_data.pop();
 
         waiting_output->pushData(input_with_data->pullData());
-        input_ports_status[input_with_data] = InputStatus::NotNeeded;
+        input_ports_status[input_with_data] = InputStatus::NotActive;
         output_ports_status[waiting_output] = OutputStatus::NotActive;
 
         if (input_with_data->isFinished())
@@ -260,17 +247,6 @@ IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs,
             output.finish();
 
         return Status::Finished;
-    }
-
-    size_t num_needed_inputs = waiting_outputs.size();
-    while (!not_needed_inputs.empty() && num_needed_inputs > 0)
-    {
-        auto input = not_needed_inputs.front();
-        not_needed_inputs.pop();
-
-        input->setNeeded();
-        input_ports_status[input] = InputStatus::Needed;
-        --num_needed_inputs;
     }
 
     if (!waiting_outputs.empty())
