@@ -238,10 +238,21 @@ bool PipelineExecutor::tryAddProcessorToStackIfUpdated(Edge & edge, Stack & stac
     /// Signal that node need to be prepared.
     edge.prev_version = edge.version;
 
-    if (edge.backward)
-        node.updated_output_ports.push_back(edge.output_port);
+    if (status == ExecStatus::New)
+    {
+        for (auto & input_port : node.processor->getInputs())
+            node.updated_input_ports.push_back(&input_port);
+
+        for (auto & output_port : node.processor->getOutputs())
+            node.updated_output_ports.push_back(&output_port);
+    }
     else
-        node.updated_input_ports.push_back(edge.input_port);
+    {
+        if (edge.backward)
+            node.updated_output_ports.push_back(edge.output_port);
+        else
+            node.updated_input_ports.push_back(edge.input_port);
+    }
 
     if (status == ExecStatus::New || status == ExecStatus::Idle)
     {
