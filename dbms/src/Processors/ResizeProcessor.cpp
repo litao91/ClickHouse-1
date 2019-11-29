@@ -153,7 +153,7 @@ ResizeProcessor::Status ResizeProcessor::prepare()
     return get_status_if_no_inputs();
 }
 
-IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs, const OutputRawPtrs & updated_outputs)
+IProcessor::Status ResizeProcessor::prepare(const PortNumbers & updated_inputs, const PortNumbers & updated_outputs)
 {
     if (!initialized)
     {
@@ -162,32 +162,33 @@ IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs,
         for (auto & input : inputs)
         {
             input.setNeeded();
-            input_ports_status[&input] = InputStatus::NotActive;
+            input_ports.emplace_back(&input, InputStatus::NotActive);
         }
 
         for (auto & output : outputs)
-            output_ports_status[&output] = OutputStatus::NotActive;
+            output_ports.emplace_back(&output, OutputStatus::NotActive);
     }
 
-    for (auto & output : updated_outputs)
+    for (auto & output_number : updated_outputs)
     {
-        if (output->isFinished())
+        auto & output = output_ports[output_number];
+        if (output.port->isFinished())
         {
-            if (output_ports_status[output] != OutputStatus::Finished)
+            if (output.status != OutputStatus::Finished)
             {
                 ++num_finished_outputs;
-                output_ports_status[output] = OutputStatus::Finished;
+                output.status = OutputStatus::Finished;
             }
 
             continue;
         }
 
-        if (output->canPush())
+        if (output.port->canPush())
         {
-            if (output_ports_status[output] != OutputStatus::NeedData)
+            if (output.status != OutputStatus::NeedData)
             {
-                output_ports_status[output] = OutputStatus::NeedData;
-                waiting_outputs.push(output);
+                output.status = OutputStatus::NeedData;
+                waiting_outputs.push(output_number);
             }
         }
     }
@@ -200,45 +201,46 @@ IProcessor::Status ResizeProcessor::prepare(const InputRawPtrs & updated_inputs,
         return Status::Finished;
     }
 
-    for (auto & input : updated_inputs)
+    for (auto & input_number : updated_inputs)
     {
-        if (input->isFinished())
+        auto & input = input_ports[input_number];
+        if (input.port->isFinished())
         {
-            if (input_ports_status[input] != InputStatus::Finished)
+            if (input.status != InputStatus::Finished)
             {
-                input_ports_status[input] = InputStatus::Finished;
+                input.status = InputStatus::Finished;
                 ++num_finished_inputs;
             }
             continue;
         }
 
-        if (input->hasData())
+        if (input.port->hasData())
         {
-            if (input_ports_status[input] != InputStatus::HasData)
+            if (input.status != InputStatus::HasData)
             {
-                input_ports_status[input] = InputStatus::HasData;
-                inputs_with_data.push(input);
+                input.status = InputStatus::HasData;
+                inputs_with_data.push(input_number);
             }
         }
     }
 
     while (!waiting_outputs.empty() && !inputs_with_data.empty())
     {
-        auto waiting_output = waiting_outputs.front();
+        auto & waiting_output = output_ports[waiting_outputs.front()];
         waiting_outputs.pop();
 
-        auto input_with_data = inputs_with_data.front();
+        auto & input_with_data = input_ports[inputs_with_data.front()];
         inputs_with_data.pop();
 
-        waiting_output->pushData(input_with_data->pullData());
-        input_ports_status[input_with_data] = InputStatus::NotActive;
-        output_ports_status[waiting_output] = OutputStatus::NotActive;
+        waiting_output.port->pushData(input_with_data.port->pullData());
+        input_with_data.status = InputStatus::NotActive;
+        waiting_output.status = OutputStatus::NotActive;
 
-        if (input_with_data->isFinished())
+        if (input_with_data.port->isFinished())
         {
-            if (input_ports_status[input_with_data] != InputStatus::Finished)
+            if (input_with_data.status != InputStatus::Finished)
             {
-                input_ports_status[input_with_data] = InputStatus::Finished;
+                input_with_data.status = InputStatus::Finished;
                 ++num_finished_inputs;
             }
         }

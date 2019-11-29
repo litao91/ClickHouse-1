@@ -32,7 +32,7 @@ public:
     String getName() const override { return "Resize"; }
 
     Status prepare() override;
-    Status prepare(const InputRawPtrs &, const OutputRawPtrs &) override;
+    Status prepare(const PortNumbers &, const PortNumbers &) override;
 
 private:
     InputPorts::iterator current_input;
@@ -40,8 +40,8 @@ private:
 
     size_t num_finished_inputs = 0;
     size_t num_finished_outputs = 0;
-    std::queue<OutputPort *> waiting_outputs;
-    std::queue<InputPort *> inputs_with_data;
+    std::queue<UInt64> waiting_outputs;
+    std::queue<UInt64> inputs_with_data;
     bool initialized = false;
 
     enum class OutputStatus
@@ -58,8 +58,20 @@ private:
         Finished,
     };
 
-    std::unordered_map<InputPort *, InputStatus> input_ports_status;
-    std::unordered_map<OutputPort *, OutputStatus> output_ports_status;
+    struct InputPortWithStatus
+    {
+        InputPort * port;
+        InputStatus status;
+    };
+
+    struct OutputPortWithStatus
+    {
+        OutputPort * port;
+        OutputStatus status;
+    };
+
+    std::vector<InputPortWithStatus> input_ports;
+    std::vector<OutputPortWithStatus> output_ports;
 };
 
 }
