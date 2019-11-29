@@ -43,13 +43,13 @@ private:
 
     struct Edge
     {
-        Edge(UInt64 to_, bool backward_, InputPort * input_port_, OutputPort * output_port_)
-         : to(to_), backward(backward_), input_port(input_port_), output_port(output_port_) {}
+        Edge(UInt64 to_, bool backward_, UInt64 input_port_number_, UInt64 output_port_number_)
+            : to(to_), backward(backward_), input_port_number(input_port_number_), output_port_number(output_port_number_) {}
 
         UInt64 to = std::numeric_limits<UInt64>::max();
         bool backward;
-        InputPort * input_port;
-        OutputPort * output_port;
+        UInt64 input_port_number;
+        UInt64 output_port_number;
 
         /// Edge version is increased when port's state is changed (e.g. when data is pushed). See Port.h for details.
         /// To compare version with prev_version we can decide if neighbour processor need to be prepared.
@@ -100,8 +100,8 @@ private:
 
         std::unique_ptr<ExecutionState> execution_state;
 
-        IProcessor::InputRawPtrs updated_input_ports;
-        IProcessor::OutputRawPtrs updated_output_ports;
+        IProcessor::PortNumbers updated_input_ports;
+        IProcessor::PortNumbers updated_output_ports;
 
         Node(IProcessor * processor_, UInt64 processor_id)
             : processor(processor_), status(ExecStatus::Idle)

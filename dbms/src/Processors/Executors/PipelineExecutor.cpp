@@ -52,7 +52,7 @@ bool PipelineExecutor::addEdges(UInt64 node)
     const IProcessor * cur = graph[node].processor;
 
     auto add_edge = [&](auto & from_port, const IProcessor * to_proc, Edges & edges,
-                        bool is_backward, InputPort * input_port, OutputPort * output_port)
+                        bool is_backward, UInt64 input_port_number, UInt64 output_port_number)
     {
         auto it = processors_map.find(to_proc);
         if (it == processors_map.end())
@@ -66,7 +66,7 @@ bool PipelineExecutor::addEdges(UInt64 node)
                 throw Exception("Multiple edges are not allowed for the same processors.", ErrorCodes::LOGICAL_ERROR);
         }
 
-        auto & edge = edges.emplace_back(proc_num, is_backward, input_port, output_port);
+        auto & edge = edges.emplace_back(proc_num, is_backward, input_port_number, output_port_number);
 
         from_port.setVersion(&edge.version);
     };
@@ -80,10 +80,11 @@ bool PipelineExecutor::addEdges(UInt64 node)
     {
         was_edge_added = true;
 
-        for (auto it = std::next(inputs.begin(), from_input); it != inputs.end(); ++it)
+        for (auto it = std::next(inputs.begin(), from_input); it != inputs.end(); ++it, ++from_input)
         {
             const IProcessor * proc = &it->getOutputPort().getProcessor();
-            add_edge(*it, proc, graph[node].backEdges, true, &*it, &it->getOutputPort());
+            auto output_port_number = proc->getOutputPortNumber(&it->getOutputPort());
+            add_edge(*it, proc, graph[node].backEdges, true, from_input, output_port_number);
         }
     }
 
@@ -94,10 +95,11 @@ bool PipelineExecutor::addEdges(UInt64 node)
     {
         was_edge_added = true;
 
-        for (auto it = std::next(outputs.begin(), from_output); it != outputs.end(); ++it)
+        for (auto it = std::next(outputs.begin(), from_output); it != outputs.end(); ++it, ++from_output)
         {
             const IProcessor * proc = &it->getInputPort().getProcessor();
-            add_edge(*it, proc, graph[node].directEdges, false, &it->getInputPort(), &*it);
+            auto input_port_number = proc->getInputPortNumber(&it->getInputPort());
+            add_edge(*it, proc, graph[node].directEdges, false, input_port_number, from_output);
         }
     }
 
@@ -200,13 +202,11 @@ void PipelineExecutor::expandPipeline(Stack & stack, UInt64 pid)
         {
             std::lock_guard guard(graph[node].status_mutex);
 
-            for (auto it = graph[node].processor->getInputs().rbegin();
-                 num_back_edges < graph[node].backEdges.size(); ++num_back_edges, ++it)
-                     graph[node].updated_input_ports.emplace_back(&*it);
+            for (; num_back_edges < graph[node].backEdges.size(); ++num_back_edges)
+                graph[node].updated_input_ports.emplace_back(num_back_edges);
 
-            for (auto it = graph[node].processor->getOutputs().rbegin();
-                 num_direct_edges < graph[node].directEdges.size(); ++num_direct_edges, ++it)
-                     graph[node].updated_output_ports.emplace_back(&*it);
+            for (; num_direct_edges < graph[node].directEdges.size(); ++num_direct_edges)
+                graph[node].updated_output_ports.emplace_back(num_direct_edges);
 
             if (graph[node].status == ExecStatus::Idle)
             {
@@ -231,9 +231,9 @@ bool PipelineExecutor::tryAddProcessorToStackIfUpdated(Edge & edge, Stack & stac
         return false;
 
     if (edge.backward)
-        node.updated_output_ports.push_back(edge.output_port);
+        node.updated_output_ports.push_back(edge.output_port_number);
     else
-        node.updated_input_ports.push_back(edge.input_port);
+        node.updated_input_ports.push_back(edge.input_port_number);
 
     if (status == ExecStatus::Idle)
     {
