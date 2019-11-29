@@ -162,11 +162,11 @@ IProcessor::Status ResizeProcessor::prepare(const PortNumbers & updated_inputs, 
         for (auto & input : inputs)
         {
             input.setNeeded();
-            input_ports.emplace_back(&input, InputStatus::NotActive);
+            input_ports.push_back({.port = &input, .status = InputStatus::NotActive});
         }
 
         for (auto & output : outputs)
-            output_ports.emplace_back(&output, OutputStatus::NotActive);
+            output_ports.push_back({.port = &output, .status = OutputStatus::NotActive});
     }
 
     for (auto & output_number : updated_outputs)
