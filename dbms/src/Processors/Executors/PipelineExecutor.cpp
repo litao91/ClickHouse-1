@@ -264,7 +264,7 @@ bool PipelineExecutor::prepareProcessor(UInt64 pid, Stack & children, Stack & pa
         std::lock_guard guard(node.status_mutex);
 
         auto status = node.processor->prepare(node.updated_input_ports, node.updated_output_ports);
-        node.updated_output_ports.clear();
+        node.updated_input_ports.clear();
         node.updated_output_ports.clear();
 
         /// node.execution_state->preparation_time_ns += watch.elapsed();
